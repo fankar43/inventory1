@@ -814,5 +814,7 @@ if __name__ == "__main__":
         open(DB_PATH, "a").close()
     with app.app_context():
         init_db()
-    print("Starting app on http://127.0.0.1:5000")
-    app.run(debug=True)
+    print("Starting app on http://0.0.0.0:5000")
+    app.run(host="0.0.0.0", port=5000, debug=False)
+
+
