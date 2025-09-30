@@ -54,11 +54,12 @@ def init_db():
         total REAL,
         date TEXT
     )""")
-    # Sales
+    # Sales - CUSTOMER NAME ADDED
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         shop_name TEXT NOT NULL,
+        customer_name TEXT DEFAULT 'Walk-in Customer',
         oil_type TEXT,
         unit TEXT,
         quantity REAL,
@@ -93,6 +94,23 @@ def current_user():
     db = get_db()
     r = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     return r
+
+# ----------------- Date formatting helper -----------------
+def format_date_for_display(date_string):
+    """Convert ISO date to DD-MM-YYYY HH:MM format for easy reading"""
+    try:
+        dt = datetime.fromisoformat(date_string.replace('Z', '+00:00'))
+        return dt.strftime("%d-%m-%Y %H:%M")
+    except:
+        return date_string
+
+def format_date_for_db(date_string):
+    """Convert DD-MM-YYYY to ISO format for database storage"""
+    try:
+        dt = datetime.strptime(date_string, "%d-%m-%Y")
+        return dt.isoformat()
+    except:
+        return datetime.now().isoformat()
 
 # ----------------- Templates (single-file style) -----------------
 BASE_HTML = """
@@ -458,7 +476,7 @@ def purchase():
     """)
     return render_template_string(BASE_HTML, body=body, user=user, active="purchase")
 
-# ---- Sell (updated to allow multiple products and auto price) ----
+# ---- Sell (updated with customer name and better date handling) ----
 @app.route("/sell", methods=["GET","POST"])
 def sell():
     user = current_user()
@@ -470,6 +488,19 @@ def sell():
     if request.method == "POST":
         db = get_db()
         cur = db.cursor()
+        
+        # Get customer name from form
+        customer_name = request.form.get("customer_name", "").strip()
+        if not customer_name:
+            customer_name = "Walk-in Customer"
+            
+        # Get sale date from form or use current date
+        sale_date_str = request.form.get("sale_date", "").strip()
+        if sale_date_str:
+            sale_date = format_date_for_db(sale_date_str)
+        else:
+            sale_date = datetime.now().isoformat()
+        
         # Collect sells to perform atomically
         sells = []
         for it in items:
@@ -514,15 +545,15 @@ def sell():
                     db.execute("DELETE FROM inventory WHERE id = ?", (s["inventory_id"],))
                 else:
                     db.execute("UPDATE inventory SET quantity=? WHERE id=?", (new_qty, s["inventory_id"]))
-                # insert a row in sales table
-                db.execute("INSERT INTO sales (shop_name, oil_type, unit, quantity, price_per_unit, total, date) VALUES (?,?,?,?,?,?,?)",
-                           (shop, s["oil_type"], s["unit"], s["qty"], s["price_per_unit"], s["total"], datetime.now().isoformat()))
+                # insert a row in sales table WITH CUSTOMER NAME
+                db.execute("INSERT INTO sales (shop_name, customer_name, oil_type, unit, quantity, price_per_unit, total, date) VALUES (?,?,?,?,?,?,?,?)",
+                           (shop, customer_name, s["oil_type"], s["unit"], s["qty"], s["price_per_unit"], s["total"], sale_date))
             db.commit()
         except Exception as e:
             db.rollback()
             flash("Error recording sale: " + str(e))
             return redirect(url_for("sell"))
-        flash("Sale recorded")
+        flash("Sale recorded successfully")
         return redirect(url_for("dashboard"))
     # GET: render multi-item sell form
     body = render_template_string("""
@@ -532,6 +563,19 @@ def sell():
           <div>No items in inventory. <a href="{{ url_for('add_inventory') }}" class="text-amber-400">Add stock</a></div>
         {% else %}
           <form method="post" id="sellForm">
+            <!-- Customer Name and Date Inputs -->
+            <div class="grid grid-cols-2 gap-4 mb-6">
+              <div>
+                <label class="block text-sm mb-1">Customer Name</label>
+                <input name="customer_name" placeholder="Enter customer name" class="w-full p-2 rounded bg-slate-700" value="Walk-in Customer" />
+              </div>
+              <div>
+                <label class="block text-sm mb-1">Sale Date (DD-MM-YYYY)</label>
+                <input name="sale_date" placeholder="DD-MM-YYYY" class="w-full p-2 rounded bg-slate-700" value="{{ today_date }}" />
+                <small class="text-slate-400">Leave empty for current date</small>
+              </div>
+            </div>
+            
             <table class="w-full text-left mb-4">
               <thead><tr class="text-slate-300"><th>Item</th><th>Unit</th><th>Available</th><th>Unit Price (Rs.)</th><th>Quantity to sell</th><th>Total</th></tr></thead>
               <tbody>
@@ -597,16 +641,16 @@ def sell():
             const avail = toFloat(document.getElementById('avail_' + id).innerText);
             if (qty > avail){
               e.preventDefault();
-              alert('Not enough stock for item id ' + id + '. Available: ' + avail);
+              alert('Not enough stock for ' + document.querySelector('tr td:first-child').innerText + '. Available: ' + avail);
               return false;
             }
           }
         });
       </script>
-    """, items=items)
+    """, items=items, today_date=datetime.now().strftime("%d-%m-%Y"))
     return render_template_string(BASE_HTML, body=body, user=user, active="sell")
 
-# ---- Sales/Purchases history ----
+# ---- Sales History (updated with customer name and formatted dates) ----
 @app.route("/sales")
 def sales_history():
     user = current_user()
@@ -615,19 +659,43 @@ def sales_history():
     shop = user["shop_name"]
     db = get_db()
     rows = db.execute("SELECT * FROM sales WHERE shop_name = ? ORDER BY date DESC LIMIT 200", (shop,)).fetchall()
+    
+    # Format dates for display
+    formatted_rows = []
+    for row in rows:
+        row_dict = dict(row)
+        row_dict['formatted_date'] = format_date_for_display(row['date'])
+        formatted_rows.append(row_dict)
+    
     body = render_template_string("""
       <div class="bg-slate-800 p-6 rounded">
         <h2 class="text-xl font-bold mb-4">Sales History</h2>
         <table class="w-full text-left">
-          <thead><tr class="text-slate-300"><th>Date</th><th>Type</th><th>Unit</th><th>Qty</th><th>Price/Unit</th><th>Total</th></tr></thead>
+          <thead><tr class="text-slate-300">
+            <th>Date & Time</th>
+            <th>Customer</th>
+            <th>Product</th>
+            <th>Unit</th>
+            <th>Qty</th>
+            <th>Price/Unit</th>
+            <th>Total</th>
+          </tr></thead>
           <tbody>
             {% for r in rows %}
-              <tr class="border-t border-slate-700"><td>{{ r['date'] }}</td><td>{{ r['oil_type'] }}</td><td>{{ r['unit'] }}</td><td>{{ '%.2f'|format(r['quantity']) }}</td><td>{{ '%.2f'|format(r['price_per_unit']) }}</td><td>{{ '%.2f'|format(r['total']) }}</td></tr>
+              <tr class="border-t border-slate-700">
+                <td>{{ r['formatted_date'] }}</td>
+                <td>{{ r['customer_name'] }}</td>
+                <td>{{ r['oil_type'] }}</td>
+                <td>{{ r['unit'] }}</td>
+                <td>{{ '%.2f'|format(r['quantity']) }}</td>
+                <td>{{ '%.2f'|format(r['price_per_unit']) }}</td>
+                <td>Rs. {{ '%.2f'|format(r['total']) }}</td>
+              </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    """, rows=rows)
+    """, rows=formatted_rows)
     return render_template_string(BASE_HTML, body=body, user=user, active="sales")
 
 @app.route("/purchases")
@@ -638,19 +706,41 @@ def purchase_history():
     shop = user["shop_name"]
     db = get_db()
     rows = db.execute("SELECT * FROM purchases WHERE shop_name = ? ORDER BY date DESC LIMIT 200", (shop,)).fetchall()
+    
+    # Format dates for display
+    formatted_rows = []
+    for row in rows:
+        row_dict = dict(row)
+        row_dict['formatted_date'] = format_date_for_display(row['date'])
+        formatted_rows.append(row_dict)
+        
     body = render_template_string("""
       <div class="bg-slate-800 p-6 rounded">
         <h2 class="text-xl font-bold mb-4">Purchase History</h2>
         <table class="w-full text-left">
-          <thead><tr class="text-slate-300"><th>Date</th><th>Type</th><th>Unit</th><th>Qty</th><th>Price/Unit</th><th>Total</th></tr></thead>
+          <thead><tr class="text-slate-300">
+            <th>Date & Time</th>
+            <th>Type</th>
+            <th>Unit</th>
+            <th>Qty</th>
+            <th>Price/Unit</th>
+            <th>Total</th>
+          </tr></thead>
           <tbody>
             {% for r in rows %}
-              <tr class="border-t border-slate-700"><td>{{ r['date'] }}</td><td>{{ r['oil_type'] }}</td><td>{{ r['unit'] }}</td><td>{{ '%.2f'|format(r['quantity']) }}</td><td>{{ '%.2f'|format(r['price_per_unit']) }}</td><td>{{ '%.2f'|format(r['total']) }}</td></tr>
+              <tr class="border-t border-slate-700">
+                <td>{{ r['formatted_date'] }}</td>
+                <td>{{ r['oil_type'] }}</td>
+                <td>{{ r['unit'] }}</td>
+                <td>{{ '%.2f'|format(r['quantity']) }}</td>
+                <td>{{ '%.2f'|format(r['price_per_unit']) }}</td>
+                <td>Rs. {{ '%.2f'|format(r['total']) }}</td>
+              </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    """, rows=rows)
+    """, rows=formatted_rows)
     return render_template_string(BASE_HTML, body=body, user=user, active="")
 
 # ---- Purchase Orders ----
@@ -674,6 +764,14 @@ def purchase_orders():
         flash("Purchase order created")
         return redirect(url_for("purchase_orders"))
     rows = db.execute("SELECT * FROM purchase_orders WHERE shop_name = ? ORDER BY date DESC", (shop,)).fetchall()
+    
+    # Format dates for display
+    formatted_rows = []
+    for row in rows:
+        row_dict = dict(row)
+        row_dict['formatted_date'] = format_date_for_display(row['date'])
+        formatted_rows.append(row_dict)
+        
     body = render_template_string("""
       <div class="bg-slate-800 p-6 rounded">
         <h2 class="text-xl font-bold mb-4">Purchase Orders</h2>
@@ -686,18 +784,28 @@ def purchase_orders():
           <div class="mt-2"><button class="bg-amber-500 px-3 py-2 rounded">Create PO</button></div>
         </form>
         <table class="w-full text-left">
-          <thead><tr class="text-slate-300"><th>Date</th><th>Type</th><th>Qty</th><th>Status</th></tr></thead>
+          <thead><tr class="text-slate-300">
+            <th>Date</th>
+            <th>Type</th>
+            <th>Qty</th>
+            <th>Status</th>
+          </tr></thead>
           <tbody>
             {% for r in rows %}
-              <tr class="border-t border-slate-700"><td>{{ r['date'] }}</td><td>{{ r['oil_type'] }} ({{ r['unit'] }})</td><td>{{ '%.2f'|format(r['quantity']) }}</td><td>{{ r['status'] }}</td></tr>
+              <tr class="border-t border-slate-700">
+                <td>{{ r['formatted_date'] }}</td>
+                <td>{{ r['oil_type'] }} ({{ r['unit'] }})</td>
+                <td>{{ '%.2f'|format(r['quantity']) }}</td>
+                <td>{{ r['status'] }}</td>
+              </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    """, rows=rows)
+    """, rows=formatted_rows)
     return render_template_string(BASE_HTML, body=body, user=user, active="po")
 
-# ---- Global SEARCH route ----
+# ---- Global SEARCH route (updated with formatted dates) ----
 @app.route("/search")
 def search():
     user = current_user()
@@ -718,14 +826,14 @@ def search():
               AND (LOWER(oil_type) LIKE LOWER(?) OR LOWER(unit) LIKE LOWER(?))
             ORDER BY oil_type
         """, (shop, like, like)).fetchall()
-        # Search sales by oil_type
+        # Search sales by oil_type or customer name
         sales_rows = db.execute("""
             SELECT * FROM sales
             WHERE shop_name = ?
-              AND (LOWER(oil_type) LIKE LOWER(?))
+              AND (LOWER(oil_type) LIKE LOWER(?) OR LOWER(customer_name) LIKE LOWER(?))
             ORDER BY date DESC
             LIMIT 500
-        """, (shop, like)).fetchall()
+        """, (shop, like, like)).fetchall()
         # Search purchases by oil_type
         purchases_rows = db.execute("""
             SELECT * FROM purchases
@@ -734,6 +842,19 @@ def search():
             ORDER BY date DESC
             LIMIT 500
         """, (shop, like)).fetchall()
+
+        # Format dates for display
+        formatted_sales = []
+        for row in sales_rows:
+            row_dict = dict(row)
+            row_dict['formatted_date'] = format_date_for_display(row['date'])
+            formatted_sales.append(row_dict)
+            
+        formatted_purchases = []
+        for row in purchases_rows:
+            row_dict = dict(row)
+            row_dict['formatted_date'] = format_date_for_display(row['date'])
+            formatted_purchases.append(row_dict)
 
         if not (inv_rows or sales_rows or purchases_rows):
             flash(f"No record found for: {q}")
@@ -766,10 +887,24 @@ def search():
           <h3 class="font-semibold mb-2">💰 Sales ({{ sales_rows|length }})</h3>
           {% if sales_rows %}
             <table class="w-full text-left mb-4">
-              <thead><tr class="text-slate-300"><th>Date</th><th>Type</th><th>Unit</th><th>Qty</th><th>Total</th></tr></thead>
+              <thead><tr class="text-slate-300">
+                <th>Date</th>
+                <th>Customer</th>
+                <th>Type</th>
+                <th>Unit</th>
+                <th>Qty</th>
+                <th>Total</th>
+              </tr></thead>
               <tbody>
                 {% for r in sales_rows %}
-                  <tr class="border-t border-slate-700"><td>{{ r['date'] }}</td><td>{{ r['oil_type'] }}</td><td>{{ r['unit'] }}</td><td>{{ '%.2f'|format(r['quantity']) }}</td><td>{{ '%.2f'|format(r['total']) }}</td></tr>
+                  <tr class="border-t border-slate-700">
+                    <td>{{ r['formatted_date'] }}</td>
+                    <td>{{ r['customer_name'] }}</td>
+                    <td>{{ r['oil_type'] }}</td>
+                    <td>{{ r['unit'] }}</td>
+                    <td>{{ '%.2f'|format(r['quantity']) }}</td>
+                    <td>Rs. {{ '%.2f'|format(r['total']) }}</td>
+                  </tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -782,10 +917,22 @@ def search():
           <h3 class="font-semibold mb-2">🛒 Purchases ({{ purchases_rows|length }})</h3>
           {% if purchases_rows %}
             <table class="w-full text-left mb-4">
-              <thead><tr class="text-slate-300"><th>Date</th><th>Type</th><th>Unit</th><th>Qty</th><th>Total</th></tr></thead>
+              <thead><tr class="text-slate-300">
+                <th>Date</th>
+                <th>Type</th>
+                <th>Unit</th>
+                <th>Qty</th>
+                <th>Total</th>
+              </tr></thead>
               <tbody>
                 {% for r in purchases_rows %}
-                  <tr class="border-t border-slate-700"><td>{{ r['date'] }}</td><td>{{ r['oil_type'] }}</td><td>{{ r['unit'] }}</td><td>{{ '%.2f'|format(r['quantity']) }}</td><td>{{ '%.2f'|format(r['total']) }}</td></tr>
+                  <tr class="border-t border-slate-700">
+                    <td>{{ r['formatted_date'] }}</td>
+                    <td>{{ r['oil_type'] }}</td>
+                    <td>{{ r['unit'] }}</td>
+                    <td>{{ '%.2f'|format(r['quantity']) }}</td>
+                    <td>Rs. {{ '%.2f'|format(r['total']) }}</td>
+                  </tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -798,7 +945,7 @@ def search():
           <a href="{{ url_for('dashboard') }}" class="bg-slate-700 px-4 py-2 rounded">Back</a>
         </div>
       </div>
-    """, q=q, inv_rows=inv_rows, sales_rows=sales_rows, purchases_rows=purchases_rows)
+    """, q=q, inv_rows=inv_rows, sales_rows=formatted_sales, purchases_rows=formatted_purchases)
     return render_template_string(BASE_HTML, body=body, user=user, active="")
 
 # ----------------- Simple API for dashboard (optional) -----------------
@@ -824,14 +971,5 @@ if __name__ == "__main__":
         open(DB_PATH, "a").close()
     with app.app_context():
         init_db()
-    print("Starting app on http://127.0.0.1:5000")
-    app.run(debug=True)
-
-# if __name__ == "__main__":
-#     # ensure DB
-#     if not os.path.exists(DB_PATH):
-#         open(DB_PATH, "a").close()
-#     with app.app_context():
-#         init_db()
-#     print("Starting app on http://0.0.0.0:5000")
-#     app.run(host="0.0.0.0", port=5000, debug=False)
+    print("Starting app on http://0.0.0.0:5000")
+    app.run(host="0.0.0.0", port=5000, debug=False)
