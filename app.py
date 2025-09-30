@@ -433,11 +433,21 @@ def purchase():
           <label class="block text-sm">Product</label><input name="oil_type" class="w-full p-2 rounded bg-slate-700 mb-2" required>
          <label class="block text-sm">Unit</label>
 <select name="unit" class="w-full p-2 rounded bg-slate-700 mb-2 text-white">
-  <option value="liters">Liters</option>
-  <option value="kg">KG</option>
-  <option value="packet">Packet</option>
-  <option value="full_box">Full Box</option>
-  <option value="botels">Botels</option>
+  <option value="Liters" selected>Liters</option>
+  <option value="Milliliters">Milliliters (ml)</option>
+  <option value="Kilograms">Kilograms (kg)</option>
+  <option value="Grams">Grams (g)</option>
+  <option value="Milligrams">Milligrams (mg)</option>
+  <option value="Packet">Packet</option>
+  <option value="Box">Box</option>
+  <option value="Dozen">Dozen</option>
+  <option value="Piece">Piece</option>
+  <option value="Roll">Roll</option>
+  <option value="Meter">Meter</option>
+  <option value="Centimeter">Centimeter</option>
+  <option value="Inch">Inch</option>
+  <option value="Ton">Ton</option>
+  <option value="Quintal">Quintal</option>
 </select>
 
           <label class="block text-sm">Quantity</label><input name="quantity" class="w-full p-2 rounded bg-slate-700 mb-2" required>
@@ -814,7 +824,14 @@ if __name__ == "__main__":
         open(DB_PATH, "a").close()
     with app.app_context():
         init_db()
-    print("Starting app on http://0.0.0.0:5000")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    print("Starting app on http://127.0.0.1:5000")
+    app.run(debug=True)
 
-
+# if __name__ == "__main__":
+#     # ensure DB
+#     if not os.path.exists(DB_PATH):
+#         open(DB_PATH, "a").close()
+#     with app.app_context():
+#         init_db()
+#     print("Starting app on http://0.0.0.0:5000")
+#     app.run(host="0.0.0.0", port=5000, debug=False)
